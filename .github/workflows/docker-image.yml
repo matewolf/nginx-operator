@@ -31,4 +31,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: latest
+          tags: ${{ env.REGISTRY }}:latest
