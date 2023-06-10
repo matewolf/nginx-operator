@@ -18,6 +18,7 @@ package main
 
 import (
 	"flag"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -30,6 +31,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	operatorv1alpha1 "github.com/matewolf/nginx-operator/api/v1alpha1"
+	"github.com/matewolf/nginx-operator/internal/controller"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -41,6 +45,9 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
+
+	utilruntime.Must(cmapi.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -85,6 +92,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controller.NginxOperatorReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NginxOperator")
+		os.Exit(1)
+	}
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

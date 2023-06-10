@@ -1,3 +1,5 @@
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
+
 # nginx-operator
 // TODO(user): Add simple overview of use/purpose
 
