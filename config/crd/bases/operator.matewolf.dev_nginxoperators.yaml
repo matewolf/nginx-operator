@@ -50,6 +50,7 @@ spec:
                 pattern: ^([a-zA-Z0-9])([a-zA-Z0-9\-\.])*([a-zA-Z0-9])?\/([a-zA-Z0-9])([a-zA-Z0-9\-\.])*([a-zA-Z0-9])?$
                 type: string
               port:
+                default: 80
                 description: Port is the number of port on which the nginx web server
                   will be exposed
                 format: int32
@@ -66,7 +67,6 @@ spec:
             - hostname
             - image
             - issuer
-            - port
             type: object
           status:
             description: NginxOperatorStatus defines the observed state of NginxOperator

@@ -61,7 +61,7 @@ type NginxOperatorReconciler struct {
 //+kubebuilder:rbac:groups=operator.matewolf.dev,resources=nginxoperators/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=``,resources=services,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=networking.k8s.io,resources=ingress,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=cert-manager.io,resources=issuers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=cert-manager.io,resources=clusterissuers,verbs=get;list;watch;create;update;patch;delete
 
@@ -79,6 +79,12 @@ func (r *NginxOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			logger.Info("Loading operator custom resource is failed")
 		}
 		return ctrl.Result{}, nil
+	}
+
+	if err = r.validateCR(operatorCR); err != nil {
+		logger.Error(err, "Error validating custom resource")
+		r.setCrFalseCondition(operatorCR, operatorv1alpha1.ReasonCustomResourceInvalid, err.Error())
+		return ctrl.Result{}, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, operatorCR)})
 	}
 
 	err = r.handleDeployment(ctx, req, operatorCR)
@@ -114,6 +120,13 @@ func (r *NginxOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&netv1.Ingress{}).
 		WithEventFilter(predicates.NewNginxOperatorPredicate()).
 		Complete(r)
+}
+
+func (r *NginxOperatorReconciler) validateCR(cr *operatorv1alpha1.NginxOperator) error {
+	if cr.Spec.Image == nil || cr.Spec.Hostname == nil || cr.Spec.Issuer == nil {
+		return e.New("At least one of Image, Hostname and Issuer is invalid")
+	}
+	return nil
 }
 
 func (r *NginxOperatorReconciler) handleDeployment(ctx context.Context, req ctrl.Request, operatorCR *operatorv1alpha1.NginxOperator) error {
@@ -176,9 +189,7 @@ func (r *NginxOperatorReconciler) createDeployment(ctx context.Context, req ctrl
 	deployment.Spec.Selector.MatchLabels["app"] = req.Name
 	deployment.Spec.Template.ObjectMeta.Labels["app"] = req.Name
 
-	if operatorCR.Spec.Image != nil {
-		deployment.Spec.Template.Spec.Containers[0].Image = *operatorCR.Spec.Image
-	}
+	deployment.Spec.Template.Spec.Containers[0].Image = *operatorCR.Spec.Image
 
 	if operatorCR.Spec.Port != nil {
 		deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = *operatorCR.Spec.Port
@@ -210,14 +221,18 @@ func (r *NginxOperatorReconciler) updateDeployment(ctx context.Context, req ctrl
 		shouldUpdate = true
 	}
 
-	if deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort != *operatorCR.Spec.Port {
-		deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = *operatorCR.Spec.Port
-		shouldUpdate = true
+	if operatorCR.Spec.Port != nil {
+		if deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort != *operatorCR.Spec.Port {
+			deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = *operatorCR.Spec.Port
+			shouldUpdate = true
+		}
 	}
 
-	if *deployment.Spec.Replicas != *operatorCR.Spec.Replicas {
-		deployment.Spec.Replicas = operatorCR.Spec.Replicas
-		shouldUpdate = true
+	if operatorCR.Spec.Replicas != nil {
+		if *deployment.Spec.Replicas != *operatorCR.Spec.Replicas {
+			deployment.Spec.Replicas = operatorCR.Spec.Replicas
+			shouldUpdate = true
+		}
 	}
 
 	if shouldUpdate {

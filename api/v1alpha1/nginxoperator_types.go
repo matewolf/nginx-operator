@@ -21,6 +21,7 @@ import (
 )
 
 const (
+	ReasonCustomResourceInvalid  = "OperandInvalid"
 	ReasonDeploymentNotAvailable = "OperandDeploymentNotAvailable"
 	ReasonCreateDeploymentFailed = "OperandCreateDeploymentFailed"
 	ReasonUpdateDeploymentFailed = "OperandUpdateDeploymentFailed"
@@ -45,10 +46,10 @@ type NginxOperatorSpec struct {
 	Hostname *string `json:"hostname"`
 
 	// Port is the number of port on which the nginx web server will be exposed
-	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65635
-	Port *int32 `json:"port"`
+	// +kubebuilder:default=80
+	Port *int32 `json:"port,omitempty"`
 
 	// Image define the image name of the nginx based container
 	// +kubebuilder:validation:Pattern=`[a-z0-9]+([._-]{1,2}[a-z0-9]+)*`
