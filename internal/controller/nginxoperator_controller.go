@@ -53,7 +53,7 @@ var (
 type NginxOperatorReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	recorder record.EventRecorder
+	Recorder record.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=operator.matewolf.dev,resources=nginxoperators,verbs=get;list;watch;create;update;patch;delete
@@ -64,6 +64,7 @@ type NginxOperatorReconciler struct {
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=cert-manager.io,resources=issuers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=cert-manager.io,resources=clusterissuers,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *NginxOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -83,7 +84,7 @@ func (r *NginxOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	if err = r.validateCR(operatorCR); err != nil {
 		logger.Error(err, "Error validating custom resource")
-		r.setCrFalseCondition(operatorCR, operatorv1alpha1.ReasonCustomResourceInvalid, err.Error())
+		r.setCrTrueCondition(operatorCR, operatorv1alpha1.ReasonCustomResourceInvalid, err.Error())
 		return ctrl.Result{}, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, operatorCR)})
 	}
 
@@ -102,7 +103,7 @@ func (r *NginxOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, operatorCR)})
 	}
 
-	r.setCrTrueCondition(
+	r.setCrFalseCondition(
 		operatorCR,
 		operatorv1alpha1.ReasonSucceeded,
 		fmt.Sprintf("Successfull reconcile"),
@@ -145,17 +146,18 @@ func (r *NginxOperatorReconciler) handleDeployment(ctx context.Context, req ctrl
 		if errors.IsNotFound(err) {
 			if err := r.createDeployment(ctx, req, operatorCR); err != nil {
 				logger.Error(err, "Error creating operand deployment.")
-				r.setCrFalseCondition(
+				r.setCrTrueCondition(
 					operatorCR,
 					operatorv1alpha1.ReasonCreateDeploymentFailed,
 					"Error creating operand deployment.",
 				)
+				r.Recorder.Event(operatorCR, corev1.EventTypeWarning, operatorv1alpha1.ReasonCreateDeploymentFailed, fmt.Sprintf("Error creating deployment."))
 				return err
 			}
 			return nil
 		} else {
 			logger.Error(err, "Error getting existing operand deployment")
-			r.setCrFalseCondition(
+			r.setCrTrueCondition(
 				operatorCR,
 				operatorv1alpha1.ReasonDeploymentNotAvailable,
 				"Error getting existing operand deployment",
@@ -166,11 +168,12 @@ func (r *NginxOperatorReconciler) handleDeployment(ctx context.Context, req ctrl
 
 	if err = r.updateDeployment(ctx, req, operatorCR, deployment); err != nil {
 		logger.Error(err, "Error update operand deployment")
-		r.setCrFalseCondition(
+		r.setCrTrueCondition(
 			operatorCR,
 			operatorv1alpha1.ReasonUpdateDeploymentFailed,
 			"Error update operand deployment.",
 		)
+		r.Recorder.Event(operatorCR, corev1.EventTypeWarning, operatorv1alpha1.ReasonUpdateDeploymentFailed, fmt.Sprintf("Error update deployment."))
 		return err
 	}
 
@@ -259,17 +262,18 @@ func (r *NginxOperatorReconciler) handleService(ctx context.Context, req ctrl.Re
 		if errors.IsNotFound(err) {
 			if err := r.createService(ctx, req, operatorCR); err != nil {
 				logger.Error(err, "Error creating operand service.")
-				r.setCrFalseCondition(
+				r.setCrTrueCondition(
 					operatorCR,
 					operatorv1alpha1.ReasonCreateServiceFailed,
 					"Error creating operand service.",
 				)
+				r.Recorder.Event(operatorCR, corev1.EventTypeWarning, operatorv1alpha1.ReasonCreateServiceFailed, fmt.Sprintf("Error create service: %s", err.Error()))
 				return err
 			}
 			return nil
 		} else {
 			logger.Error(err, "Error getting operand service.")
-			r.setCrFalseCondition(
+			r.setCrTrueCondition(
 				operatorCR,
 				operatorv1alpha1.ReasonServiceNotAvailable,
 				"Error getting operand service.",
@@ -280,11 +284,12 @@ func (r *NginxOperatorReconciler) handleService(ctx context.Context, req ctrl.Re
 
 	if err = r.updateService(ctx, req, operatorCR, service); err != nil {
 		logger.Error(err, "Error updating operand service.")
-		r.setCrFalseCondition(
+		r.setCrTrueCondition(
 			operatorCR,
 			operatorv1alpha1.ReasonUpdateServiceFailed,
 			"Error updating operand service.",
 		)
+		r.Recorder.Event(operatorCR, corev1.EventTypeWarning, operatorv1alpha1.ReasonUpdateServiceFailed, fmt.Sprintf("Error update service: %s", err.Error()))
 		return err
 	}
 
@@ -353,17 +358,18 @@ func (r *NginxOperatorReconciler) handleIngress(ctx context.Context, req ctrl.Re
 		if errors.IsNotFound(err) {
 			if err := r.createIngress(ctx, req, operatorCR); err != nil {
 				logger.Error(err, "Error creating ingress.")
-				r.setCrFalseCondition(
+				r.setCrTrueCondition(
 					operatorCR,
 					operatorv1alpha1.ReasonCreateIngressFailed,
 					"Error creating ingress.",
 				)
+				r.Recorder.Event(operatorCR, corev1.EventTypeWarning, operatorv1alpha1.ReasonCreateIngressFailed, fmt.Sprintf("Error create ingress: %s", err.Error()))
 				return err
 			}
 			return nil
 		} else {
 			logger.Error(err, "Error getting operand ingress.")
-			r.setCrFalseCondition(
+			r.setCrTrueCondition(
 				operatorCR,
 				operatorv1alpha1.ReasonIngressNotAvailable,
 				"Error getting operand ingress.",
@@ -374,11 +380,12 @@ func (r *NginxOperatorReconciler) handleIngress(ctx context.Context, req ctrl.Re
 
 	if err = r.updateIngress(ctx, req, operatorCR, ingress); err != nil {
 		logger.Error(err, "Error updating operand ingress.")
-		r.setCrFalseCondition(
+		r.setCrTrueCondition(
 			operatorCR,
 			operatorv1alpha1.ReasonUpdateIngressFailed,
 			"Error updating operand ingress.",
 		)
+		r.Recorder.Event(operatorCR, corev1.EventTypeWarning, operatorv1alpha1.ReasonUpdateIngressFailed, fmt.Sprintf("Error update ingress: %s", err.Error()))
 		return err
 	}
 
