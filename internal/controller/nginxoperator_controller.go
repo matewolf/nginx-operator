@@ -21,6 +21,7 @@ import (
 	e "errors"
 	"fmt"
 	"github.com/matewolf/nginx-operator/assets"
+	"github.com/matewolf/nginx-operator/internal/predicates"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
@@ -29,8 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,9 +44,9 @@ import (
 )
 
 var (
-	CLUSTER_ISSUER_ANNOTATION = "cert-manager.io/cluster-issuer"
-	ISSUER_ANNOTATION         = "cert-manager.io/issuer"
-	LAST_MODIFIED_ANNOTATION  = "nginx-operator/last-modified"
+	ClusterIssuerAnnotation = "cert-manager.io/cluster-issuer"
+	IssuerAnnotation        = "cert-manager.io/issuer"
+	LastModifiedGeneration  = "nginxoperator/last-modified-generation"
 )
 
 // NginxOperatorReconciler reconciles a NginxOperator object
@@ -60,78 +60,6 @@ type NginxOperatorReconciler struct {
 //+kubebuilder:rbac:groups=operator.matewolf.dev,resources=nginxoperators/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=operator.matewolf.dev,resources=nginxoperators/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-
-func ignoreDeletionPredicate() predicate.Predicate {
-	return predicate.Funcs{
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			// Ignore updates to CR status in which case metadata.Generation does not change
-			fmt.Print("Update - ")
-			switch e.ObjectOld.(type) {
-			case *operatorv1alpha1.NginxOperator:
-				fmt.Print("Operator -")
-			case *appsv1.Deployment:
-				fmt.Print("Deployment -")
-			case *netv1.Ingress:
-				fmt.Print("Ingress -")
-			case *corev1.Service:
-				fmt.Print("Service -")
-			}
-			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
-				fmt.Println("Mehet")
-				return true
-			} else {
-				fmt.Println("Blokk")
-				return false
-			}
-		},
-		DeleteFunc: func(e event.DeleteEvent) bool {
-			// Evaluates to false if the object has been confirmed deleted.
-			fmt.Print("Delete - ")
-
-			switch e.Object.(type) {
-			case *operatorv1alpha1.NginxOperator:
-				fmt.Print("Operator -")
-			case *appsv1.Deployment:
-				fmt.Print("Deployment -")
-			case *netv1.Ingress:
-				fmt.Print("Ingress -")
-			case *corev1.Service:
-				fmt.Print("Service -")
-			}
-			return true
-		},
-		CreateFunc: func(createEvent event.CreateEvent) bool {
-			fmt.Print("Create - ")
-			switch createEvent.Object.(type) {
-			case *operatorv1alpha1.NginxOperator:
-				fmt.Print("Operator -")
-			case *appsv1.Deployment:
-				fmt.Print("Deployment -")
-			case *netv1.Ingress:
-				fmt.Print("Ingress -")
-			case *corev1.Service:
-				fmt.Print("Service -")
-			}
-			fmt.Println()
-			return true
-		},
-		GenericFunc: func(genericEvent event.GenericEvent) bool {
-			fmt.Print("Create - ")
-			switch genericEvent.Object.(type) {
-			case *operatorv1alpha1.NginxOperator:
-				fmt.Print("Operator -")
-			case *appsv1.Deployment:
-				fmt.Print("Deployment -")
-			case *netv1.Ingress:
-				fmt.Print("Ingress -")
-			case *corev1.Service:
-				fmt.Print("Service -")
-			}
-			fmt.Println()
-			return true
-		},
-	}
-}
 
 func (r *NginxOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -178,7 +106,9 @@ func (r *NginxOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&operatorv1alpha1.NginxOperator{}).
 		Owns(&appsv1.Deployment{}).
-		WithEventFilter(ignoreDeletionPredicate()).
+		Owns(&corev1.Service{}).
+		Owns(&netv1.Ingress{}).
+		WithEventFilter(predicates.NewNginxOperatorPredicate()).
 		Complete(r)
 }
 
@@ -203,6 +133,7 @@ func (r *NginxOperatorReconciler) handleDeployment(ctx context.Context, req ctrl
 					operatorv1alpha1.ReasonCreateDeploymentFailed,
 					"Error creating operand deployment.",
 				)
+				return err
 			}
 			return nil
 		} else {
@@ -223,6 +154,7 @@ func (r *NginxOperatorReconciler) handleDeployment(ctx context.Context, req ctrl
 			operatorv1alpha1.ReasonUpdateDeploymentFailed,
 			"Error update operand deployment.",
 		)
+		return err
 	}
 
 	return nil
@@ -251,6 +183,8 @@ func (r *NginxOperatorReconciler) createDeployment(ctx context.Context, req ctrl
 	if operatorCR.Spec.Replicas != nil {
 		deployment.Spec.Replicas = operatorCR.Spec.Replicas
 	}
+
+	r.setLastModifiedGen(deployment)
 
 	if err = ctrl.SetControllerReference(operatorCR, deployment, r.Scheme); err != nil {
 		return err
@@ -283,6 +217,8 @@ func (r *NginxOperatorReconciler) updateDeployment(ctx context.Context, req ctrl
 	}
 
 	if shouldUpdate {
+		r.setLastModifiedGen(deployment)
+
 		if err := ctrl.SetControllerReference(operatorCR, deployment, r.Scheme); err != nil {
 			return err
 		}
@@ -311,6 +247,7 @@ func (r *NginxOperatorReconciler) handleService(ctx context.Context, req ctrl.Re
 				)
 				return err
 			}
+			return nil
 		} else {
 			logger.Error(err, "Error getting operand service.")
 			r.setCrFalseCondition(
@@ -350,6 +287,8 @@ func (r *NginxOperatorReconciler) createService(ctx context.Context, req ctrl.Re
 		service.Spec.Ports[0].TargetPort.IntVal = *operatorCR.Spec.Port
 	}
 
+	r.setLastModifiedGen(service)
+
 	if err = ctrl.SetControllerReference(operatorCR, service, r.Scheme); err != nil {
 		return err
 	}
@@ -372,6 +311,8 @@ func (r *NginxOperatorReconciler) updateService(ctx context.Context, req ctrl.Re
 	}
 
 	if shouldUpdate {
+		r.setLastModifiedGen(service)
+
 		if err := ctrl.SetControllerReference(operatorCR, service, r.Scheme); err != nil {
 			return err
 		}
@@ -400,6 +341,7 @@ func (r *NginxOperatorReconciler) handleIngress(ctx context.Context, req ctrl.Re
 				)
 				return err
 			}
+			return nil
 		} else {
 			logger.Error(err, "Error getting operand ingress.")
 			r.setCrFalseCondition(
@@ -407,6 +349,7 @@ func (r *NginxOperatorReconciler) handleIngress(ctx context.Context, req ctrl.Re
 				operatorv1alpha1.ReasonIngressNotAvailable,
 				"Error getting operand ingress.",
 			)
+			return err
 		}
 	}
 
@@ -417,6 +360,7 @@ func (r *NginxOperatorReconciler) handleIngress(ctx context.Context, req ctrl.Re
 			operatorv1alpha1.ReasonUpdateIngressFailed,
 			"Error updating operand ingress.",
 		)
+		return err
 	}
 
 	return nil
@@ -461,6 +405,8 @@ func (r *NginxOperatorReconciler) createIngress(ctx context.Context, req ctrl.Re
 			},
 		},
 	}
+
+	r.setLastModifiedGen(ingress)
 
 	if err = ctrl.SetControllerReference(operatorCR, ingress, r.Scheme); err != nil {
 		return err
@@ -516,8 +462,8 @@ func (r *NginxOperatorReconciler) updateIngress(ctx context.Context, req ctrl.Re
 		return err
 	}
 
-	if ingress.Annotations[ISSUER_ANNOTATION] != issuerKey.Name ||
-		ingress.Annotations[CLUSTER_ISSUER_ANNOTATION] != issuerKey.Name {
+	if ingress.Annotations[IssuerAnnotation] != issuerKey.Name &&
+		ingress.Annotations[ClusterIssuerAnnotation] != issuerKey.Name {
 		shouldUpdate = true
 		if err = r.setIssuerAnnotation(ctx, ingress, operatorCR); err != nil {
 			return err
@@ -525,11 +471,13 @@ func (r *NginxOperatorReconciler) updateIngress(ctx context.Context, req ctrl.Re
 	}
 
 	if shouldUpdate {
-		if err := ctrl.SetControllerReference(operatorCR, ingress, r.Scheme); err != nil {
+		r.setLastModifiedGen(ingress)
+
+		if err = ctrl.SetControllerReference(operatorCR, ingress, r.Scheme); err != nil {
 			return err
 		}
 
-		if err := r.Update(ctx, ingress); err != nil {
+		if err = r.Update(ctx, ingress); err != nil {
 			return err
 		}
 	}
@@ -550,9 +498,9 @@ func (r *NginxOperatorReconciler) setIssuerAnnotation(ctx context.Context, ingre
 
 	switch issuer.(type) {
 	case *cmapi.Issuer:
-		ingress.Annotations[ISSUER_ANNOTATION] = key.Name
+		ingress.Annotations[IssuerAnnotation] = key.Name
 	case *cmapi.ClusterIssuer:
-		ingress.Annotations[CLUSTER_ISSUER_ANNOTATION] = key.Name
+		ingress.Annotations[ClusterIssuerAnnotation] = key.Name
 	}
 
 	return nil
@@ -582,6 +530,15 @@ func (r *NginxOperatorReconciler) getObjectKeyFromIssuer(issuerStr string) (clie
 	}
 
 	return client.ObjectKey{Namespace: parts[0], Name: parts[1]}, nil
+}
+
+func (r *NginxOperatorReconciler) setLastModifiedGen(obj client.Object) {
+	currentAnnotations := obj.GetAnnotations()
+	if currentAnnotations == nil {
+		currentAnnotations = map[string]string{}
+	}
+	currentAnnotations[LastModifiedGeneration] = strconv.Itoa(int(obj.GetGeneration()))
+	obj.SetAnnotations(currentAnnotations)
 }
 
 func (r *NginxOperatorReconciler) setCrTrueCondition(cr *operatorv1alpha1.NginxOperator, reason, message string) {
