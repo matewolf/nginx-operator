@@ -43,7 +43,7 @@ spec:
         - /manager
         args:
         - --leader-elect
-        image: matewolf/nginx-operator:0.3
+        image: ghcr.io/matewolf/nginx-operator:main
         name: manager
         securityContext:
           allowPrivilegeEscalation: false
