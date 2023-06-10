@@ -60,7 +60,7 @@ type NginxOperatorReconciler struct {
 //+kubebuilder:rbac:groups=operator.matewolf.dev,resources=nginxoperators/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=operator.matewolf.dev,resources=nginxoperators/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=,resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=``,resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingress,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=cert-manager.io,resources=issuers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=cert-manager.io,resources=clusterissuers,verbs=get;list;watch;create;update;patch;delete
