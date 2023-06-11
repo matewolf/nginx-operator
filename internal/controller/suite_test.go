@@ -356,8 +356,6 @@ var _ = Describe("NginxOperator controller", func() {
 					correctNginxop.SetNamespace(namespace)
 					err := k8sClient.Create(ctx, &correctNginxop)
 					Expect(err.Error()).To(ContainSubstring("invalid: spec.hostname"))
-
-					fmt.Println(ownerref)
 				})
 			})
 
@@ -393,8 +391,6 @@ var _ = Describe("NginxOperator controller", func() {
 					correctNginxop.SetNamespace(namespace)
 					err := k8sClient.Create(ctx, &correctNginxop)
 					Expect(err.Error()).To(ContainSubstring("invalid: spec.image"))
-
-					fmt.Println(ownerref)
 				})
 			})
 
@@ -407,8 +403,6 @@ var _ = Describe("NginxOperator controller", func() {
 					correctNginxop.SetNamespace(namespace)
 					err := k8sClient.Create(ctx, &correctNginxop)
 					Expect(err.Error()).To(ContainSubstring("invalid: spec.issuer"))
-
-					fmt.Println(ownerref)
 				})
 			})
 
@@ -589,7 +583,6 @@ var _ = Describe("NginxOperator controller", func() {
 			})
 
 			It("ingress should be modified", func() {
-				fmt.Println(ownerref)
 				var currentIng netv1.Ingress
 				Eventually(assertOnObject(name, namespace, &currentIng, func(ingress *netv1.Ingress) bool {
 					return ingress.Annotations[IssuerAnnotation] == newIssuerName &&
@@ -692,8 +685,6 @@ var _ = Describe("NginxOperator controller", func() {
 				Eventually(
 					objectExists(name, namespace, &currentDep), 10, 1,
 				).Should(BeTrue())
-
-				fmt.Println(ownerref)
 			})
 		})
 
@@ -714,8 +705,6 @@ var _ = Describe("NginxOperator controller", func() {
 				Eventually(
 					objectExists(name, namespace, &currentSvc), 10, 1,
 				).Should(BeTrue())
-
-				fmt.Println(ownerref)
 			})
 		})
 
@@ -736,8 +725,6 @@ var _ = Describe("NginxOperator controller", func() {
 				Eventually(
 					objectExists(name, namespace, &currentIng), 10, 1,
 				).Should(BeTrue())
-
-				fmt.Println(ownerref)
 			})
 		})
 
@@ -769,8 +756,6 @@ var _ = Describe("NginxOperator controller", func() {
 				Eventually(
 					objectExists(name, namespace, &currentOp), 10, 1,
 				).Should(BeFalse())
-
-				fmt.Println(ownerref)
 			})
 		})
 	})

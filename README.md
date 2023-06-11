@@ -1,96 +1,88 @@
+# NginxOperator
+
+NginxOperator is a Kubernetes operator that is created for deploying and maintaining nginx web server (or nginx web server based) containers.
+
+## Functional desription
+
+As every Kubernetes operator, NginxOperator is also based on a Kubernetes Custom Resource, which has the Kind **NginxOperator**. With the help of **Spec** part of this custom resource the user can modify the behaviour of the operator. The following fields are defined in the Custom Resource Definition of the NginxOperator Kind:
+ > * **hostname**: It defines on which hostname the webserver will be reachable from internet.
+ > * **image**: It defines which (Nginx web server based) container image should be deployed in the cluster.
+ > * **port**: It defines on which port the webserver is waiting for the requests.
+ > * **replicas**: It defines how many instance of the web server will be deployed to the cluster.
+ > * **issuer**: Operator has the capabilities for setting the TLS encryption for the deployed web server. For this reason it needs an **Issuer** or a **ClusterIssuer** type resource inside the Kubernetes cluster. The expected format of the input is:<br> *\<namespace of the resource>/\<name of the resource>*
+
+NginxOperator is capable of:
+> * Deploying Nginx web server based containers which can be accessible on a given hostname and  can be opened using HTTPS secure connection outside from the cluster.
+> * Set the TLS encryption for the web server.
+> * Handling modifications in the NginxOpetor CR.
+> * Repairing the sytem in case of any unexpected event.
+> * Deleting the web server in case of deletion of CR.
+
+The operator is continuously trying to harmonize the cluster state with the CR state. It happens in a Reconcile loop. The status of the last try of reconcile is reported in the **ReconcileFailed** condition inside the NginxOperator type Custom Resource. 
+
+## Installation
+You’ll need a Kubernetes cluster to run against. You can use [KIND](https://sigs.k8s.io/kind) to get a local cluster for testing, or run against a remote cluster.<br>
+>_**Note:** Your controller will automatically use the current context in your kubeconfig file (i.e. whatever cluster `kubectl cluster-info` shows)._
+
+### Prerequisites
+#### 1. Ingress controller
+Ingress contoller has to be installed on your cluster. [NGINX Ingress controller](https://docs.nginx.com/nginx-ingress-controller/) could be a good choice. In case of KIND you can install it with the following command:
+```shell
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+```
+>_**Note**: Your node has to have the `ingress-ready=true` label._
+
+#### 2. Cert-Manager
+Cert-Manager is also needed for running operator. You can install it on any cluster with the following command:
+```shell
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.yaml
+```
 
-# nginx-operator
-// TODO(user): Add simple overview of use/purpose
-
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
-
-## Getting Started
-You’ll need a Kubernetes cluster to run against. You can use [KIND](https://sigs.k8s.io/kind) to get a local cluster for testing, or run against a remote cluster.
-**Note:** Your controller will automatically use the current context in your kubeconfig file (i.e. whatever cluster `kubectl cluster-info` shows).
+#### 3. Install an issuer
+An **Issuer** or a **ClusterIssuer** type resource needs to be installed on the cluster. A basic ClusterIssuer can be applied with the following code:
+```shell
+kubectl apply -f assets/manifests/selfsigned-issuer.yaml
+```
+or
+```
+kubectl apply -f assets/manifests/letsencrypt-issuer.yaml
+```
 
 ### Running on the cluster
-1. Install Instances of Custom Resources:
+#### 1. Deploy the controller to the cluster and all additional resources:
 
 ```sh
-kubectl apply -f config/samples/
+make deploy
 ```
 
-2. Build and push your image to the location specified by `IMG`:
-
+#### 2. Install Instance of Custom Resource:
 ```sh
-make docker-build docker-push IMG=<some-registry>/nginx-operator:tag
+kubectl apply -f config/samples/operator_v1alpha1_nginxoperator.yaml
 ```
 
-3. Deploy the controller to the cluster with the image specified by `IMG`:
-
-```sh
-make deploy IMG=<some-registry>/nginx-operator:tag
-```
-
-### Uninstall CRDs
+### Tested on the following versions:
+* **Kubernetes**: 1.27
+* **Ingress controller**: 1.8.0
+* **Cert-manager**: 1.12.0
+## Uninstall
 To delete the CRDs from the cluster:
-
 ```sh
 make uninstall
 ```
 
-### Undeploy controller
 UnDeploy the controller from the cluster:
-
 ```sh
 make undeploy
 ```
 
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-### How it works
-This project aims to follow the Kubernetes [Operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/).
-
-It uses [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/),
-which provide a reconcile function responsible for synchronizing resources until the desired state is reached on the cluster.
-
-### Test It Out
-1. Install the CRDs into the cluster:
-
-```sh
-make install
+## Run tests
+The project contains integration tests. To run integration tests you need a cluster that has the same prerequisites as detailed in the Installation section. Ater that you can run tests with the following command:
+```shell
+make test
 ```
-
-2. Run your controller (this will run in the foreground, so switch to a new terminal if you want to leave it running):
-
-```sh
-make run
-```
-
-**NOTE:** You can also run this in one step by running: `make install run`
-
-### Modifying the API definitions
-If you are editing the API definitions, generate the manifests such as CRs or CRDs using:
-
-```sh
-make manifests
-```
-
-**NOTE:** Run `make --help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+>_**Note**: Make sure that run `make undeploy` before running tests._
 
 ## License
 
-Copyright 2023.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+MIT
 

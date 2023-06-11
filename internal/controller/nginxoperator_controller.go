@@ -69,7 +69,6 @@ type NginxOperatorReconciler struct {
 func (r *NginxOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 
 	logger := log.FromContext(ctx)
-	logger.Info("Reconcile")
 
 	// Try to get operator CR
 	operatorCR := &operatorv1alpha1.NginxOperator{}
