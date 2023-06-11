@@ -8,7 +8,7 @@ import (
 	"strconv"
 )
 
-var (
+const (
 	LastModifiedGeneration = "nginxoperator/last-modified-generation"
 )
 

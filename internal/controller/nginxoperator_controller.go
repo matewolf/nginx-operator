@@ -43,7 +43,7 @@ import (
 	operatorv1alpha1 "github.com/matewolf/nginx-operator/api/v1alpha1"
 )
 
-var (
+const (
 	ClusterIssuerAnnotation = "cert-manager.io/cluster-issuer"
 	IssuerAnnotation        = "cert-manager.io/issuer"
 	LastModifiedGeneration  = "nginxoperator/last-modified-generation"
@@ -67,6 +67,7 @@ type NginxOperatorReconciler struct {
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *NginxOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+
 	logger := log.FromContext(ctx)
 	logger.Info("Reconcile")
 
@@ -238,6 +239,16 @@ func (r *NginxOperatorReconciler) updateDeployment(ctx context.Context, req ctrl
 		}
 	}
 
+	if deployment.Spec.Template.ObjectMeta.Labels["app"] != req.Name {
+		shouldUpdate = true
+		deployment.Spec.Template.ObjectMeta.Labels["app"] = req.Name
+	}
+
+	if deployment.Spec.Selector.MatchLabels["app"] != req.Name {
+		shouldUpdate = true
+		deployment.Spec.Selector.MatchLabels["app"] = req.Name
+	}
+
 	if shouldUpdate {
 		r.setLastModifiedGen(deployment)
 
@@ -328,10 +339,15 @@ func (r *NginxOperatorReconciler) updateService(ctx context.Context, req ctrl.Re
 	shouldUpdate := false
 
 	if operatorCR.Spec.Port != nil {
-		if service.Spec.Ports[0].Port != *operatorCR.Spec.Port {
-			service.Spec.Ports[0].Port = *operatorCR.Spec.Port
+		if service.Spec.Ports[0].TargetPort.IntVal != *operatorCR.Spec.Port {
+			service.Spec.Ports[0].TargetPort.IntVal = *operatorCR.Spec.Port
 			shouldUpdate = true
 		}
+	}
+
+	if service.Spec.Selector["app"] != req.Name {
+		shouldUpdate = true
+		service.Spec.Selector["app"] = req.Name
 	}
 
 	if shouldUpdate {
@@ -516,6 +532,9 @@ func (r *NginxOperatorReconciler) setIssuerAnnotation(ctx context.Context, ingre
 	if err != nil {
 		return err
 	}
+
+	delete(ingress.Annotations, ClusterIssuerAnnotation)
+	delete(ingress.Annotations, IssuerAnnotation)
 
 	issuer, err := r.getIssuer(ctx, key)
 	if err != nil {
