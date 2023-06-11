@@ -596,7 +596,7 @@ func (r *NginxOperatorReconciler) setCrFalseCondition(cr *operatorv1alpha1.Nginx
 
 func (r *NginxOperatorReconciler) setCrCondition(cr *operatorv1alpha1.NginxOperator, reason, message string, status metav1.ConditionStatus) {
 	meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
-		Type:               "ReconcileFailed",
+		Type:               operatorv1alpha1.ConditionTypeReconcileFailed,
 		Status:             status,
 		Reason:             reason,
 		LastTransitionTime: metav1.NewTime(time.Now()),

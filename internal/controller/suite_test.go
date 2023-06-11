@@ -22,6 +22,7 @@ import (
 	certv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
@@ -141,20 +142,313 @@ var _ = AfterSuite(func() {
 })
 
 var _ = Describe("NginxOperator controller", func() {
+
+	var (
+		nginxop  operatorv1alpha1.NginxOperator
+		ownerref *metav1.OwnerReference
+		name     string
+		image    string
+		hostname string
+		port     int32
+		replicas int32
+		crIssuer string
+	)
+
 	When("When creating an NginxOperator instance", func() {
-		var (
-			nginxop  operatorv1alpha1.NginxOperator
-			ownerref *metav1.OwnerReference
-			name     string
-			image    string
-			hostname string
-			port     int32
-			replicas int32
-			crIssuer string
-		)
+		Context("NginxOperator contains correct values", func() {
+
+			BeforeEach(func() {
+				// Create the NginxOperator instance
+				image = fmt.Sprintf("nginx:latest")
+				hostname = "hello-world.info"
+				port = int32(80)
+				crIssuer = "default/issuer"
+				replicas = int32(1)
+				nginxop = operatorv1alpha1.NginxOperator{
+					Spec: operatorv1alpha1.NginxOperatorSpec{
+						Hostname: &hostname,
+						Port:     &port,
+						Image:    &image,
+						Issuer:   &crIssuer,
+						Replicas: &replicas,
+					},
+				}
+
+				// Deploy Nginxoperator
+				name = fmt.Sprintf("nginxoperator-%d", rand.Intn(1000))
+				nginxop.SetName(name)
+				nginxop.SetNamespace(namespace)
+				err := k8sClient.Create(ctx, &nginxop)
+				Expect(err).NotTo(HaveOccurred())
+				ownerref = metav1.NewControllerRef(
+					&nginxop,
+					operatorv1alpha1.GroupVersion.WithKind("NginxOperator"),
+				)
+			})
+
+			AfterEach(func() {
+				k8sClient.Delete(ctx, &nginxop)
+			})
+
+			It("should create services", func() {
+				By("should create a deployment")
+				var dep appsv1.Deployment
+				Eventually(
+					objectExists(name, namespace, &dep), 10, 1,
+				).Should(BeTrue())
+
+				By("should create a service")
+				var svc corev1.Service
+				Eventually(
+					objectExists(name, namespace, &svc), 10, 1,
+				).Should(BeTrue())
+
+				By("should create an ingress")
+				var ingress netv1.Ingress
+				Eventually(
+					objectExists(name, namespace, &ingress), 10, 1,
+				).Should(BeTrue())
+			})
+
+			When("deployment is found", func() {
+				var dep appsv1.Deployment
+				BeforeEach(func() {
+					Eventually(
+						objectExists(name, namespace, &dep),
+						10, 1,
+					).Should(BeTrue())
+				})
+
+				It("should be owned by the NginxOperator instance", func() {
+					Expect(dep.GetOwnerReferences()).
+						To(ContainElement(*ownerref))
+				})
+
+				It("should configured correctly", func() {
+					By("should use image defined in NginxOperator instance")
+					Expect(
+						dep.Spec.Template.Spec.Containers[0].Image,
+					).To(Equal(image))
+
+					By("should use the number of replica specified in NginxOperator instance")
+					Expect(
+						*dep.Spec.Replicas,
+					).To(Equal(replicas))
+
+					By("should use port, defined in NginxOperator instance, as pod's container port")
+					Expect(
+						dep.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort,
+					).To(Equal(port))
+
+					By("pod template labels should contain app name")
+					Expect(
+						dep.Spec.Template.Labels["app"],
+					).To(Equal(name))
+
+					By("deployment selector should contain app name")
+					Expect(
+						dep.Spec.Selector.MatchLabels["app"],
+					).To(Equal(name))
+				})
+
+				It("annotations should have contain last modified value", func() {
+					Expect(
+						dep.ObjectMeta.Annotations[LastModifiedGeneration],
+					).To(Equal("0"))
+				})
+			})
+
+			When("service is found", func() {
+				var svc corev1.Service
+				BeforeEach(func() {
+					Eventually(
+						objectExists(name, namespace, &svc),
+						10, 1,
+					).Should(BeTrue())
+				})
+
+				It("target port should be the same defined in NginxOperator", func() {
+					Expect(
+						svc.Spec.Ports[0].TargetPort.IntVal,
+					).To(Equal(port))
+				})
+
+				It("selector should be the app name", func() {
+					Expect(
+						svc.Spec.Selector["app"],
+					).To(Equal(name))
+				})
+
+				It("annotations should have contain last modified value", func() {
+					Expect(
+						svc.ObjectMeta.Annotations[LastModifiedGeneration],
+					).To(Equal("0"))
+				})
+
+			})
+
+			When("ingress is found", func() {
+				var ingress netv1.Ingress
+				BeforeEach(func() {
+					Eventually(
+						objectExists(name, namespace, &ingress),
+						10, 1,
+					).Should(BeTrue())
+				})
+
+				It("ingress annotation should contain issuer", func() {
+					Expect(
+						ingress.ObjectMeta.Annotations[ClusterIssuerAnnotation],
+					).To(Equal(issuerName))
+				})
+
+				It("ingress should be configured correctly", func() {
+					By("tls hosts should contain hostname defined in NginxOperator")
+					Expect(
+						slices.ContainsFunc(ingress.Spec.TLS, func(tls netv1.IngressTLS) bool {
+							return slices.Contains(tls.Hosts, hostname)
+						}),
+					).To(BeTrue())
+
+					By("rules should contain the a rule with a hostname defined in NginxOperator")
+					Expect(ingress.Spec.Rules[0].Host).To(Equal(hostname))
+
+					By("and a service with a correct name")
+					Expect(ingress.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Backend.Service.Name).To(Equal(name))
+
+				})
+
+				It("annotations should have contain last modified value", func() {
+					Expect(
+						ingress.ObjectMeta.Annotations[LastModifiedGeneration],
+					).To(Equal("0"))
+				})
+			})
+		})
+
+		Context("When operator values are not correct", func() {
+			var correctNginxop operatorv1alpha1.NginxOperator
+
+			BeforeEach(func() {
+				image = fmt.Sprintf("nginx:latest")
+				hostname = "hello-world.info"
+				port = int32(80)
+				crIssuer = "default/issuer"
+				replicas = int32(1)
+
+				correctNginxop = operatorv1alpha1.NginxOperator{
+					Spec: operatorv1alpha1.NginxOperatorSpec{
+						Hostname: &hostname,
+						Port:     &port,
+						Image:    &image,
+						Issuer:   &crIssuer,
+						Replicas: &replicas,
+					},
+				}
+			})
+
+			When("When hostname is nil", func() {
+				It("Should trigger a validation error", func() {
+					correctNginxop.Spec.Hostname = nil
+
+					name = fmt.Sprintf("nginxoperator-%d", rand.Intn(1000))
+					correctNginxop.SetName(name)
+					correctNginxop.SetNamespace(namespace)
+					err := k8sClient.Create(ctx, &correctNginxop)
+					Expect(err.Error()).To(ContainSubstring("invalid: spec.hostname"))
+
+					fmt.Println(ownerref)
+				})
+			})
+
+			When("When port is nil", func() {
+				It("port should be 80", func() {
+					correctNginxop.Spec.Port = nil
+
+					name = fmt.Sprintf("nginxoperator-%d", rand.Intn(1000))
+					correctNginxop.SetName(name)
+					correctNginxop.SetNamespace(namespace)
+					err := k8sClient.Create(ctx, &correctNginxop)
+					Expect(err).NotTo(HaveOccurred())
+					ownerref = metav1.NewControllerRef(
+						&nginxop,
+						operatorv1alpha1.GroupVersion.WithKind("NginxOperator"),
+					)
+
+					var currentOp operatorv1alpha1.NginxOperator
+					Eventually(assertOnObject(name, namespace, &currentOp, func(currentOp *operatorv1alpha1.NginxOperator) bool {
+						return *currentOp.Spec.Port == int32(80)
+					}), 10, 1).Should(BeTrue())
+
+					k8sClient.Delete(ctx, &currentOp)
+				})
+			})
+
+			When("When image is nil", func() {
+				It("Should trigger a validation error", func() {
+					correctNginxop.Spec.Image = nil
+
+					name = fmt.Sprintf("nginxoperator-%d", rand.Intn(1000))
+					correctNginxop.SetName(name)
+					correctNginxop.SetNamespace(namespace)
+					err := k8sClient.Create(ctx, &correctNginxop)
+					Expect(err.Error()).To(ContainSubstring("invalid: spec.image"))
+
+					fmt.Println(ownerref)
+				})
+			})
+
+			When("When issuer is nil", func() {
+				It("Should trigger a validation error", func() {
+					correctNginxop.Spec.Issuer = nil
+
+					name = fmt.Sprintf("nginxoperator-%d", rand.Intn(1000))
+					correctNginxop.SetName(name)
+					correctNginxop.SetNamespace(namespace)
+					err := k8sClient.Create(ctx, &correctNginxop)
+					Expect(err.Error()).To(ContainSubstring("invalid: spec.issuer"))
+
+					fmt.Println(ownerref)
+				})
+			})
+
+			When("When replicas is nil", func() {
+				It("Replicas should be 1", func() {
+					correctNginxop.Spec.Replicas = nil
+
+					name = fmt.Sprintf("nginxoperator-%d", rand.Intn(1000))
+					correctNginxop.SetName(name)
+					correctNginxop.SetNamespace(namespace)
+					err := k8sClient.Create(ctx, &correctNginxop)
+					Expect(err).NotTo(HaveOccurred())
+					ownerref = metav1.NewControllerRef(
+						&nginxop,
+						operatorv1alpha1.GroupVersion.WithKind("NginxOperator"),
+					)
+
+					var currentOp operatorv1alpha1.NginxOperator
+
+					Eventually(assertOnObject(name, namespace, &currentOp, func(currentOp *operatorv1alpha1.NginxOperator) bool {
+						return *currentOp.Spec.Replicas == int32(1)
+					}), 10, 1).Should(BeTrue())
+
+					k8sClient.Delete(ctx, &currentOp)
+				})
+			})
+
+			AfterEach(func() {
+				k8sClient.Delete(ctx, &nginxop)
+			})
+		})
+	})
+
+	When("When the NginxOperator spec is changed", func() {
+		var dep appsv1.Deployment
+		var ingress netv1.Ingress
+		var svc corev1.Service
 
 		BeforeEach(func() {
-			// Create the MyResource instance
+			// Create the NginxOperator instance
 			image = fmt.Sprintf("nginx:latest")
 			hostname = "hello-world.info"
 			port = int32(80)
@@ -180,296 +474,303 @@ var _ = Describe("NginxOperator controller", func() {
 				&nginxop,
 				operatorv1alpha1.GroupVersion.WithKind("NginxOperator"),
 			)
+
+			Eventually(
+				objectExists(name, namespace, &dep), 10, 1,
+			).Should(BeTrue())
+
+			Eventually(
+				objectExists(name, namespace, &svc), 10, 1,
+			).Should(BeTrue())
+
+			Eventually(
+				objectExists(name, namespace, &ingress), 10, 1,
+			).Should(BeTrue())
 		})
 
 		AfterEach(func() {
 			k8sClient.Delete(ctx, &nginxop)
 		})
 
-		//It("should create services", func() {
-		//	By("should create a deployment")
-		//	var dep appsv1.Deployment
-		//	Eventually(
-		//		objectExists(name, namespace, &dep), 10, 1,
-		//	).Should(BeTrue())
-		//
-		//	By("should create a service")
-		//	var svc corev1.Service
-		//	Eventually(
-		//		objectExists(name, namespace, &svc), 10, 1,
-		//	).Should(BeTrue())
-		//
-		//	By("should create an ingress")
-		//	var ingress netv1.Ingress
-		//	Eventually(
-		//		objectExists(name, namespace, &ingress), 10, 1,
-		//	).Should(BeTrue())
-		//})
-		//
-		//When("deployment is found", func() {
-		//	var dep appsv1.Deployment
-		//	BeforeEach(func() {
-		//		Eventually(
-		//			objectExists(name, namespace, &dep),
-		//			10, 1,
-		//		).Should(BeTrue())
-		//	})
-		//
-		//	It("should be owned by the NginxOperator instance", func() {
-		//		Expect(dep.GetOwnerReferences()).
-		//			To(ContainElement(*ownerref))
-		//	})
-		//
-		//	It("should configured correctly", func() {
-		//		By("should use image defined in NginxOperator instance")
-		//		Expect(
-		//			dep.Spec.Template.Spec.Containers[0].Image,
-		//		).To(Equal(image))
-		//
-		//		By("should use the number of replica specified in NginxOperator instance")
-		//		Expect(
-		//			*dep.Spec.Replicas,
-		//		).To(Equal(replicas))
-		//
-		//		By("should use port, defined in NginxOperator instance, as pod's container port")
-		//		Expect(
-		//			dep.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort,
-		//		).To(Equal(port))
-		//
-		//		By("pod template labels should contain app name")
-		//		Expect(
-		//			dep.Spec.Template.Labels["app"],
-		//		).To(Equal(name))
-		//
-		//		By("deployment selector should contain app name")
-		//		Expect(
-		//			dep.Spec.Selector.MatchLabels["app"],
-		//		).To(Equal(name))
-		//	})
-		//
-		//	It("annotations should have contain last modified value", func() {
-		//		Expect(
-		//			dep.ObjectMeta.Annotations[LastModifiedGeneration],
-		//		).To(Equal("0"))
-		//	})
-		//})
-		//
-		//When("service is found", func() {
-		//	var svc corev1.Service
-		//	BeforeEach(func() {
-		//		Eventually(
-		//			objectExists(name, namespace, &svc),
-		//			10, 1,
-		//		).Should(BeTrue())
-		//	})
-		//
-		//	It("target port should be the same defined in NginxOperator", func() {
-		//		Expect(
-		//			svc.Spec.Ports[0].TargetPort.IntVal,
-		//		).To(Equal(port))
-		//	})
-		//
-		//	It("selector should be the app name", func() {
-		//		Expect(
-		//			svc.Spec.Selector["app"],
-		//		).To(Equal(name))
-		//	})
-		//
-		//	It("annotations should have contain last modified value", func() {
-		//		Expect(
-		//			svc.ObjectMeta.Annotations[LastModifiedGeneration],
-		//		).To(Equal("0"))
-		//	})
-		//
-		//})
-		//
-		//When("ingress is found", func() {
-		//	var ingress netv1.Ingress
-		//	BeforeEach(func() {
-		//		Eventually(
-		//			objectExists(name, namespace, &ingress),
-		//			10, 1,
-		//		).Should(BeTrue())
-		//	})
-		//
-		//	It("ingress annotation should contain issuer", func() {
-		//		Expect(
-		//			ingress.ObjectMeta.Annotations[ClusterIssuerAnnotation],
-		//		).To(Equal(issuerName))
-		//	})
-		//
-		//	It("ingress should be configured correctly", func() {
-		//		By("tls hosts should contain hostname defined in NginxOperator")
-		//		Expect(
-		//			slices.ContainsFunc(ingress.Spec.TLS, func(tls netv1.IngressTLS) bool {
-		//				return slices.Contains(tls.Hosts, hostname)
-		//			}),
-		//		).To(BeTrue())
-		//
-		//		By("rules should contain the a rule with a hostname defined in NginxOperator")
-		//		Expect(ingress.Spec.Rules[0].Host).To(Equal(hostname))
-		//
-		//		By("and a service with a correct name")
-		//		Expect(ingress.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Backend.Service.Name).To(Equal(name))
-		//
-		//	})
-		//
-		//	It("annotations should have contain last modified value", func() {
-		//		Expect(
-		//			ingress.ObjectMeta.Annotations[LastModifiedGeneration],
-		//		).To(Equal("0"))
-		//	})
-		//})
+		When("replicas number is changed to 2", func() {
+			var replica2 int32
 
-		When("When the NginxOperator spec is changed", func() {
+			BeforeEach(func() {
+				replica2 = int32(2)
+				k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
+				nginxop.Spec.Replicas = &replica2
+				err := k8sClient.Update(ctx, &nginxop)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("deployment should be modified", func() {
+				var currentDep appsv1.Deployment
+				Eventually(assertOnObject(name, namespace, &currentDep, func(deployment *appsv1.Deployment) bool {
+					return *deployment.Spec.Replicas == replica2
+				}), 10, 1).Should(BeTrue())
+			})
+		})
+
+		When("hostname is changed to matewolf.dev", func() {
+			var newHostname string
+
+			BeforeEach(func() {
+				newHostname = "matewolf.dev"
+				k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
+				nginxop.Spec.Hostname = &newHostname
+				err := k8sClient.Update(ctx, &nginxop)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("ingress should be modified", func() {
+				var currentIngress netv1.Ingress
+				Eventually(
+					assertOnObject(name, namespace, &currentIngress, func(t *netv1.Ingress) bool {
+						return slices.Contains(t.Spec.TLS[0].Hosts, newHostname) &&
+							t.Spec.Rules[0].Host == newHostname
+					}), 10, 1,
+				).Should(BeTrue())
+			})
+		})
+
+		When("image changed to nginx:1.25.0", func() {
+			var newImage string
+
+			BeforeEach(func() {
+				newImage = "nginx:1.25.0"
+				k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
+				nginxop.Spec.Image = &newImage
+				err := k8sClient.Update(ctx, &nginxop)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("deployment should be modified", func() {
+				var currentDep appsv1.Deployment
+				Eventually(assertOnObject(name, namespace, &currentDep, func(deployment *appsv1.Deployment) bool {
+					return deployment.Spec.Template.Spec.Containers[0].Image == newImage
+				}), 10, 1).Should(BeTrue())
+			})
+		})
+
+		When("issuer is changed to default/self-signed2", Ordered, func() {
+			var newIssuerNamespacedName string
+			var newIssuerName string
+
+			var newIssuer certv1.Issuer
+
+			BeforeAll(func() {
+				// Create issuer
+				newIssuer = certv1.Issuer{
+					Spec: certv1.IssuerSpec{
+						IssuerConfig: certv1.IssuerConfig{
+							SelfSigned: &certv1.SelfSignedIssuer{},
+						},
+					},
+				}
+
+				// Deploy issuer
+				newIssuerName = "issuer2"
+				newIssuerNamespacedName = namespace + "/" + newIssuerName
+				newIssuer.SetName(newIssuerName)
+				newIssuer.SetNamespace(namespace)
+				err := k8sClient.Create(ctx, &newIssuer)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			BeforeEach(func() {
+				k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
+				nginxop.Spec.Issuer = &newIssuerNamespacedName
+				err := k8sClient.Update(ctx, &nginxop)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			AfterAll(func() {
+				k8sClient.Delete(ctx, &newIssuer)
+			})
+
+			It("ingress should be modified", func() {
+				fmt.Println(ownerref)
+				var currentIng netv1.Ingress
+				Eventually(assertOnObject(name, namespace, &currentIng, func(ingress *netv1.Ingress) bool {
+					return ingress.Annotations[IssuerAnnotation] == newIssuerName &&
+						ingress.Annotations[ClusterIssuerAnnotation] == ""
+				}), 10, 1).Should(BeTrue())
+			})
+		})
+
+		When("when port is changed to 81", func() {
+			var newPort int32
+
+			BeforeEach(func() {
+				newPort = int32(81)
+				k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
+				nginxop.Spec.Port = &newPort
+				err := k8sClient.Update(ctx, &nginxop)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("deployment should be modified", func() {
+				var currentDep appsv1.Deployment
+				Eventually(assertOnObject(name, namespace, &currentDep, func(currentDep *appsv1.Deployment) bool {
+					return currentDep.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort == newPort
+				}), 10, 1).Should(BeTrue())
+			})
+
+			It("service should be modified", func() {
+				var currentSvc corev1.Service
+				Eventually(assertOnObject(name, namespace, &currentSvc, func(currentSvc *corev1.Service) bool {
+					return currentSvc.Spec.Ports[0].TargetPort.IntVal == newPort
+				}), 10, 1).Should(BeTrue())
+			})
+		})
+	})
+
+	When("When resources will be deleted", func() {
+		BeforeEach(func() {
 			var dep appsv1.Deployment
 			var ingress netv1.Ingress
 			var svc corev1.Service
 
-			BeforeEach(func() {
+			// Create the NginxOperator instance
+			image = fmt.Sprintf("nginx:latest")
+			hostname = "hello-world.info"
+			port = int32(80)
+			crIssuer = "default/issuer"
+			replicas = int32(1)
+			nginxop = operatorv1alpha1.NginxOperator{
+				Spec: operatorv1alpha1.NginxOperatorSpec{
+					Hostname: &hostname,
+					Port:     &port,
+					Image:    &image,
+					Issuer:   &crIssuer,
+					Replicas: &replicas,
+				},
+			}
+
+			// Deploy Nginxoperator
+			name = fmt.Sprintf("nginxoperator-%d", rand.Intn(1000))
+			nginxop.SetName(name)
+			nginxop.SetNamespace(namespace)
+			err := k8sClient.Create(ctx, &nginxop)
+			Expect(err).NotTo(HaveOccurred())
+			ownerref = metav1.NewControllerRef(
+				&nginxop,
+				operatorv1alpha1.GroupVersion.WithKind("NginxOperator"),
+			)
+
+			Eventually(
+				objectExists(name, namespace, &dep), 10, 1,
+			).Should(BeTrue())
+
+			Eventually(
+				objectExists(name, namespace, &svc), 10, 1,
+			).Should(BeTrue())
+
+			Eventually(
+				objectExists(name, namespace, &ingress), 20, 1,
+			).Should(BeTrue())
+		})
+
+		AfterEach(func() {
+			k8sClient.Delete(ctx, &nginxop)
+		})
+
+		When("deleting deployment", func() {
+			It("should be recreated", func() {
+				var currentDep appsv1.Deployment
 				Eventually(
-					objectExists(name, namespace, &dep), 10, 1,
+					objectExists(name, namespace, &currentDep), 10, 1,
 				).Should(BeTrue())
 
-				Eventually(
-					objectExists(name, namespace, &svc), 10, 1,
-				).Should(BeTrue())
+				err := k8sClient.Delete(ctx, &currentDep)
+				Expect(err).NotTo(HaveOccurred())
 
 				Eventually(
-					objectExists(name, namespace, &ingress), 10, 1,
+					objectExists(name, namespace, &currentDep), 10, 1,
+				).Should(BeFalse())
+
+				Eventually(
+					objectExists(name, namespace, &currentDep), 10, 1,
 				).Should(BeTrue())
+
+				fmt.Println(ownerref)
 			})
+		})
 
-			//When("replicas number is changed to 2", func() {
-			//	var replica2 int32
-			//
-			//	BeforeEach(func() {
-			//		replica2 = int32(2)
-			//		k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
-			//		nginxop.Spec.Replicas = &replica2
-			//		err := k8sClient.Update(ctx, &nginxop)
-			//		Expect(err).NotTo(HaveOccurred())
-			//	})
-			//
-			//	It("deployment should be modified", func() {
-			//		var currentDep appsv1.Deployment
-			//		Eventually(assertOnObject(name, namespace, &currentDep, func(deployment *appsv1.Deployment) bool {
-			//			return *deployment.Spec.Replicas == replica2
-			//		}), 10, 1).Should(BeTrue())
-			//	})
-			//})
-			//
-			//When("hostname is changed to matewolf.dev", func() {
-			//	var newHostname string
-			//
-			//	BeforeEach(func() {
-			//		newHostname = "matewolf.dev"
-			//		k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
-			//		nginxop.Spec.Hostname = &newHostname
-			//		err := k8sClient.Update(ctx, &nginxop)
-			//		Expect(err).NotTo(HaveOccurred())
-			//	})
-			//
-			//	It("ingress should be modified", func() {
-			//		var currentIngress netv1.Ingress
-			//		Eventually(
-			//			assertOnObject(name, namespace, &currentIngress, func(t *netv1.Ingress) bool {
-			//				return slices.Contains(t.Spec.TLS[0].Hosts, newHostname) &&
-			//					t.Spec.Rules[0].Host == newHostname
-			//			}), 10, 1,
-			//		).Should(BeTrue())
-			//	})
-			//})
-			//
-			//When("image changed to nginx:1.25.0", func() {
-			//	var newImage string
-			//
-			//	BeforeEach(func() {
-			//		newImage = "nginx:1.25.0"
-			//		k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
-			//		nginxop.Spec.Image = &newImage
-			//		err := k8sClient.Update(ctx, &nginxop)
-			//		Expect(err).NotTo(HaveOccurred())
-			//	})
-			//
-			//	It("deployment should be modified", func() {
-			//		var currentDep appsv1.Deployment
-			//		Eventually(assertOnObject(name, namespace, &currentDep, func(deployment *appsv1.Deployment) bool {
-			//			return deployment.Spec.Template.Spec.Containers[0].Image == newImage
-			//		}), 10, 1).Should(BeTrue())
-			//	})
-			//})
+		When("deleting service", func() {
+			It("should be recreated", func() {
+				var currentSvc corev1.Service
+				Eventually(
+					objectExists(name, namespace, &currentSvc), 10, 1,
+				).Should(BeTrue())
 
-			When("issuer is changed to default/self-signed2", Ordered, func() {
-				var newIssuerNamespacedName string
-				var newIssuerName string
+				err := k8sClient.Delete(ctx, &currentSvc)
+				Expect(err).NotTo(HaveOccurred())
 
-				var newIssuer certv1.Issuer
+				Eventually(
+					objectExists(name, namespace, &currentSvc), 10, 1,
+				).Should(BeFalse())
 
-				BeforeAll(func() {
-					// Create issuer
-					newIssuer = certv1.Issuer{
-						Spec: certv1.IssuerSpec{
-							IssuerConfig: certv1.IssuerConfig{
-								SelfSigned: &certv1.SelfSignedIssuer{},
-							},
-						},
-					}
+				Eventually(
+					objectExists(name, namespace, &currentSvc), 10, 1,
+				).Should(BeTrue())
 
-					// Deploy issuer
-					newIssuerName = "issuer2"
-					newIssuerNamespacedName = namespace + "/" + newIssuerName
-					newIssuer.SetName(newIssuerName)
-					newIssuer.SetNamespace(namespace)
-					err := k8sClient.Create(ctx, &newIssuer)
-					Expect(err).NotTo(HaveOccurred())
-				})
-
-				BeforeEach(func() {
-					k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
-					nginxop.Spec.Issuer = &newIssuerNamespacedName
-					err := k8sClient.Update(ctx, &nginxop)
-					Expect(err).NotTo(HaveOccurred())
-				})
-
-				AfterAll(func() {
-					k8sClient.Delete(ctx, &newIssuer)
-				})
-
-				It("ingress should be modified", func() {
-					fmt.Println(ownerref)
-					var currentIng netv1.Ingress
-					Eventually(assertOnObject(name, namespace, &currentIng, func(ingress *netv1.Ingress) bool {
-						return ingress.Annotations[IssuerAnnotation] == newIssuerName &&
-							ingress.Annotations[ClusterIssuerAnnotation] == ""
-					}), 10, 1).Should(BeTrue())
-				})
+				fmt.Println(ownerref)
 			})
+		})
 
-			When("when port is changed to 81", func() {
-				var newPort int32
+		When("deleting ingress", func() {
+			It("should be recreated", func() {
+				var currentIng netv1.Ingress
+				Eventually(
+					objectExists(name, namespace, &currentIng), 10, 1,
+				).Should(BeTrue())
 
-				BeforeEach(func() {
-					newPort = int32(81)
-					k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &nginxop)
-					nginxop.Spec.Port = &newPort
-					err := k8sClient.Update(ctx, &nginxop)
-					Expect(err).NotTo(HaveOccurred())
-				})
+				err := k8sClient.Delete(ctx, &currentIng)
+				Expect(err).NotTo(HaveOccurred())
 
-				It("deployment should be modified", func() {
-					var currentDep appsv1.Deployment
-					Eventually(assertOnObject(name, namespace, &currentDep, func(currentDep *appsv1.Deployment) bool {
-						return currentDep.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort == newPort
-					}), 10, 1).Should(BeTrue())
-				})
+				Eventually(
+					objectExists(name, namespace, &currentIng), 10, 1,
+				).Should(BeFalse())
 
-				It("service should be modified", func() {
-					var currentSvc corev1.Service
-					Eventually(assertOnObject(name, namespace, &currentSvc, func(currentSvc *corev1.Service) bool {
-						return currentSvc.Spec.Ports[0].TargetPort.IntVal == newPort
-					}), 10, 1).Should(BeTrue())
-				})
+				Eventually(
+					objectExists(name, namespace, &currentIng), 10, 1,
+				).Should(BeTrue())
+
+				fmt.Println(ownerref)
+			})
+		})
+
+		When("deleting NginxOperator", func() {
+			It("all referenced resources should be deleted", func() {
+				var currentOp operatorv1alpha1.NginxOperator
+				Eventually(
+					objectExists(name, namespace, &currentOp), 10, 1,
+				).Should(BeTrue())
+
+				err := k8sClient.Delete(ctx, &currentOp)
+				Expect(err).NotTo(HaveOccurred())
+
+				var currentDep appsv1.Deployment
+				Eventually(
+					objectExists(name, namespace, &currentDep), 10, 1,
+				).Should(BeFalse())
+
+				var currentSvc corev1.Service
+				Eventually(
+					objectExists(name, namespace, &currentSvc), 10, 1,
+				).Should(BeFalse())
+
+				var currentIng netv1.Ingress
+				Eventually(
+					objectExists(name, namespace, &currentIng), 10, 1,
+				).Should(BeFalse())
+
+				Eventually(
+					objectExists(name, namespace, &currentOp), 10, 1,
+				).Should(BeFalse())
+
+				fmt.Println(ownerref)
 			})
 		})
 	})

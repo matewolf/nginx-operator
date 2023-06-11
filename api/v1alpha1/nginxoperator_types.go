@@ -21,6 +21,8 @@ import (
 )
 
 const (
+	ConditionTypeReconcileFailed = "ReconcileFailed"
+
 	ReasonCustomResourceInvalid  = "OperandInvalid"
 	ReasonDeploymentNotAvailable = "OperandDeploymentNotAvailable"
 	ReasonCreateDeploymentFailed = "OperandCreateDeploymentFailed"
